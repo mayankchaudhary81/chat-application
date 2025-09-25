@@ -52,9 +52,6 @@ A chat window will open where you can send and receive messages.
 Chat in real-time
 Multiple clients can connect to the same server and exchange messages instantly.
 
-📸 Screenshots (Optional)
-
-Add screenshots here if you want to showcase the chat window and server console.
 
 ✅ Future Improvements
 
