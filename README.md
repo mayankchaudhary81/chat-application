@@ -1,65 +1,53 @@
-# Chat Application (Python + Sockets + CustomTkinter)
+# Mesynk 🚀
 
-A fast, real-time chat application built using Python sockets for networking and **CustomTkinter** for a modern, dark-mode-native graphical user interface (GUI).
-This project demonstrates how multiple clients can connect to a server and exchange messages seamlessly in a beautifully styled chatroom environment.
+A modern, fast, and secure real-time chat application built with Python. 
+This project demonstrates robust network programming (via Sockets), multi-threading, environment configuration, and modern desktop UI design using CustomTkinter.
 
-## 🚀 Features
+## 🌟 Features
+- **Client-Server Architecture**: Dedicated servers capable of handling asynchronous multi-user communication.
+- **Modern UI**: Dark-mode natively styled using `customtkinter`, featuring fluid connection loading states, animated in-app toast notifications, and aesthetic chat interfaces.
+- **Robust Error Handling**: Graceful client and server disconnects without crashed sockets or application hangs.
+- **Environment Driven Settings**: Hidden system variables (ports and IPs) securely abstracted in `.env` configurations.
 
-- **Multi-client chatroom support**: Connect multiple users simultaneously
-- **Threaded Server Architecture**: Efficiently handles multiple connections at once
-- **Modern GUI Client**: Sleek `customtkinter` interface featuring automatic dark/light mode matching
-- **Integrated Login Screen**: In-app nickname prompt with connection validation
-- **Real-time message broadcasting**: Instantaneous chat experience
-- **User-friendly interface**: Stylized input boxes, rounded buttons, and a scrollable text area
-
-## 🛠️ Technologies Used
-
-- **Python 3**
-- **socket** (for networking layer)
-- **threading** (for handling asynchronous background connections)
-- **customtkinter** (for the modern GUI client)
-
-## 📂 Project Structure
+## 🛠️ Architecture & Project Structure
+The application is strictly separated into the backend `server/` node and the interactive `client/` graphical interface:
 ```text
-├── server.py   # Server-side code to handle client connections
-├── client.py   # Client-side GUI application
+├── client/
+│   └── client.py      # GUI and Socket Logic for users
+├── server/
+│   └── server.py      # Socket server, connection handler and broadcaster
+├── .env               # Environment configurations
+├── requirements.txt   # Dependency list
+└── README.md          # Documentation
 ```
 
 ## ⚙️ Installation & Usage
 
-### 1. Install Dependencies
-Before running the client, you must install the UI framework:
+**1. Install dependencies:**
 ```bash
-pip install customtkinter
+pip install -r requirements.txt
 ```
 
-### 2. Start the Server
-Run the server script to listen for incoming connections.
-```bash
-python server.py
+**2. Configure your environment:**
+Open the `.env` file and set your networking preferences.
+```env
+HOST=127.0.0.1
+PORT=55555
 ```
-The server will start listening on `127.0.0.1:55555`.
 
-### 3. Start the Client(s)
-Run the client script. The application window will open directly to a login screen.
+**3. Run the Server:**
+Launch the background listener node.
 ```bash
-python client.py
+python server/server.py
 ```
-Enter a nickname and click **Join**. If the server is running, you will seamlessly transition into the chatroom where you can send and receive real-time messages!
+
+**4. Start Client Connections:**
+Open a new terminal window and launch a UI client.
+```bash
+python client/client.py
+```
+*(You can open as many clients as you want to simulate multiple users!)*
 
 ---
 
-## ✅ Future Improvements
-
-- Add file sharing support
-- Add message timestamps
-- Create a persistent login/registration system across sessions
-
-## 🤝 Contributing
-
-Contributions are welcome! Feel free to fork this repo and submit a pull request with improvements.
-
-## Contact
-**Name**: Mayank Chaudhary  
-**Email**: chaudharymayank8928@gmail.com  
-**LinkedIn**: [www.linkedin.com/in/-mayank-chaudhary](https://www.linkedin.com/in/-mayank-chaudhary)
+*This project was heavily refactored over a comprehensive 7-day sprint targeting file restructuring, environment safety, UI polish, and error resilience to mirror modern enterprise standards.*
