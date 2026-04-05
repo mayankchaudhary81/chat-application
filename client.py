@@ -1,60 +1,103 @@
 import socket
 import threading
-import tkinter
-from tkinter import simpledialog, scrolledtext
+import customtkinter as ctk
+import sys
 
-# Client GUI class using tkinter
 class ChatClientGUI:
-    def __init__(self, nickname, host='127.0.0.1', port=55555):
-        self.nickname = nickname  # Store the nickname as an instance variable
+    def __init__(self, app, host='127.0.0.1', port=55555):
+        self.win = app
+        self.host = host
+        self.port = port
+        
         self.client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.client.connect((host, port))
-
+        self.running = False
         self.gui_done = False
-        self.running = True
-
-        # Start the GUI thread
-        gui_thread = threading.Thread(target=self.gui_loop)
-        gui_thread.start()
-
-        # Start the receiving messages thread
-        receive_thread = threading.Thread(target=self.receive)
-        receive_thread.start()
-
-    # GUI Loop that sets up the interface
-    def gui_loop(self):
-        self.win = tkinter.Tk()
-        self.win.configure(bg="lightgray")
-        self.win.title(f"Chat Application - {self.nickname}")
-
-        self.chat_label = tkinter.Label(self.win, text="Chat:", bg="lightgray")
-        self.chat_label.config(font=("Arial", 12))
-        self.chat_label.pack(padx=20, pady=5)
-
-        # Text area to display chat messages
-        self.text_area = scrolledtext.ScrolledText(self.win)
-        self.text_area.pack(padx=20, pady=5)
-        self.text_area.config(state="disabled")  # To make the chat area read-only
-
-        # Label for message input
-        self.msg_label = tkinter.Label(self.win, text="Enter your message:", bg="lightgray")
-        self.msg_label.config(font=("Arial", 12))
-        self.msg_label.pack(padx=20, pady=5)
-
-        # Entry box for typing the message
-        self.input_area = tkinter.Entry(self.win, font=("Arial", 12))
-        self.input_area.pack(padx=20, pady=5)
-
-        # Send button
-        self.send_button = tkinter.Button(self.win, text="Send", command=self.write)
-        self.send_button.config(font=("Arial", 12))
-        self.send_button.pack(padx=20, pady=5)
-
-        # Gracefully close the window
+        
+        # Setup Main Window
+        self.win.title("Chat Application")
+        self.win.geometry("500x600")
+        
+        # Configure initial grid
+        self.win.grid_rowconfigure(0, weight=1)
+        self.win.grid_columnconfigure(0, weight=1)
+        
+        # Create Login Frame
+        self.login_frame = ctk.CTkFrame(self.win)
+        self.login_frame.grid(row=0, column=0, sticky="nsew")
+        self.login_frame.grid_rowconfigure((0, 1, 2, 3), weight=1)
+        self.login_frame.grid_columnconfigure(0, weight=1)
+        
+        self.nickname_label = ctk.CTkLabel(self.login_frame, text="Join Chat", font=("Inter", 24, "bold"))
+        self.nickname_label.grid(row=0, column=0, pady=(100, 10))
+        
+        self.nickname_entry = ctk.CTkEntry(self.login_frame, placeholder_text="Enter Nickname...", width=250, height=45, font=("Inter", 14))
+        self.nickname_entry.grid(row=1, column=0, pady=10)
+        self.nickname_entry.bind('<Return>', lambda event: self.connect_server())
+        
+        self.login_btn = ctk.CTkButton(self.login_frame, text="Join", width=250, height=45, font=("Inter", 14, "bold"), command=self.connect_server)
+        self.login_btn.grid(row=2, column=0, pady=10)
+        
+        self.error_label = ctk.CTkLabel(self.login_frame, text="", text_color="#FF6B6B", font=("Inter", 12))
+        self.error_label.grid(row=3, column=0, pady=(10, 100))
+        
         self.win.protocol("WM_DELETE_WINDOW", self.stop)
+        
+        # Force the UI to show immediately without grabbing focus incorrectly
+        self.win.lift()
 
+    def connect_server(self):
+        self.nickname = self.nickname_entry.get().strip()
+        if not self.nickname:
+            self.error_label.configure(text="Nickname is required.")
+            return
+            
+        self.error_label.configure(text="Connecting...", text_color="#FCA311")
+        self.win.update_idletasks() # Force UI refresh
+            
+        try:
+            self.client.connect((self.host, self.port))
+            # Success! Build Chat Interface
+            self.build_chat_interface()
+            
+            self.running = True
+            # Start the receiving messages thread
+            receive_thread = threading.Thread(target=self.receive, daemon=True)
+            receive_thread.start()
+        except ConnectionRefusedError:
+            self.error_label.configure(text="Connection Refused! Is server.py running?", text_color="#FF6B6B")
+            # Reset the socket so a user can try again safely
+            self.client.close()
+            self.client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        except Exception as e:
+            self.error_label.configure(text=f"Error: {e}", text_color="#FF6B6B")
+
+    def build_chat_interface(self):
+        # Destroy the login screen
+        self.login_frame.destroy()
+        
+        self.win.title(f"Chat Application - {self.nickname}")
+        
+        # Reconfigure grid for chat screen
+        self.win.grid_rowconfigure(0, weight=1)
+        self.win.grid_columnconfigure(0, weight=1)
+        self.win.grid_columnconfigure(1, weight=0)
+
+        self.text_area = ctk.CTkTextbox(self.win, state="disabled", wrap="word", corner_radius=10, font=("Inter", 13))
+        self.text_area.grid(row=0, column=0, columnspan=2, padx=20, pady=(20, 10), sticky="nsew")
+
+        self.input_area = ctk.CTkEntry(self.win, placeholder_text="Type a message...", corner_radius=10, height=45, font=("Inter", 14))
+        self.input_area.grid(row=1, column=0, padx=(20, 10), pady=(10, 20), sticky="ew")
+
+        # Unbind previous return key for login and rebind to send message
+        self.win.bind('<Return>', lambda event: self.write())
+
+        self.send_button = ctk.CTkButton(self.win, text="Send", command=self.write, width=80, height=45, corner_radius=10, font=("Inter", 14, "bold"))
+        self.send_button.grid(row=1, column=1, padx=(0, 20), pady=(10, 20), sticky="e")
+        
         self.gui_done = True
-        self.win.mainloop()
+        
+        # Focus on input area immediately to start typing
+        self.input_area.focus()
 
     # Receive messages from the server
     def receive(self):
@@ -66,38 +109,41 @@ class ChatClientGUI:
                     self.client.send(self.nickname.encode('utf-8'))
                 else:
                     if self.gui_done:
-                        self.text_area.config(state="normal")
+                        self.text_area.configure(state="normal")
                         self.text_area.insert('end', message + '\n')
                         self.text_area.yview('end')
-                        self.text_area.config(state="disabled")
-            except ConnectionAbortedError:
-                break
-            except:
-                print("Error occurred!")
+                        self.text_area.configure(state="disabled")
+            except Exception as e:
+                # Connection closed
                 self.client.close()
                 break
 
     # Send messages to the server
     def write(self):
-        message = f'{self.nickname}: {self.input_area.get()}'
-        self.client.send(message.encode('utf-8'))
-        self.input_area.delete(0, 'end')
+        if not self.gui_done: return
+        
+        text = self.input_area.get()
+        if text.strip():
+            message = f'{self.nickname}: {text}'
+            try:
+                self.client.send(message.encode('utf-8'))
+                self.input_area.delete(0, 'end')
+            except:
+                pass
 
-    # Stop the client and close the GUI
     def stop(self):
         self.running = False
         self.win.destroy()
-        self.client.close()
-        exit(0)
+        try:
+            self.client.close()
+        except:
+            pass
+        sys.exit(0)
 
-# Create a temporary root window to ask for the nickname, then hide it
-root = tkinter.Tk()
-root.withdraw()  # Hide the root window
-
-# Ask for nickname before starting the GUI
-nickname = simpledialog.askstring("Nickname", "Please choose a nickname", parent=root)
-
-# Create the client GUI and pass the nickname
-client = ChatClientGUI(nickname)
-
-
+if __name__ == "__main__":
+    ctk.set_appearance_mode("System")
+    ctk.set_default_color_theme("blue")
+    
+    app = ctk.CTk()
+    client = ChatClientGUI(app)
+    app.mainloop()
