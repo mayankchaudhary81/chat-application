@@ -39,6 +39,34 @@ def initialize_db():
             read_by TEXT DEFAULT '[]'
         )
     ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS groups (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            created_by TEXT
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS group_members (
+            group_id TEXT NOT NULL,
+            username TEXT NOT NULL,
+            joined_at TEXT,
+            PRIMARY KEY (group_id, username)
+        )
+    ''')
+    
+    try:
+        cursor.execute("ALTER TABLE messages ADD COLUMN group_id TEXT DEFAULT 'global'")
+    except sqlite3.OperationalError:
+        pass
+        
+    cursor.execute("INSERT OR IGNORE INTO groups (id, name, created_by) VALUES ('global', 'Global', 'system')")
+    
+    cursor.execute("SELECT username FROM users")
+    users = cursor.fetchall()
+    for user in users:
+        cursor.execute("INSERT OR IGNORE INTO group_members (group_id, username) VALUES ('global', ?)", (user[0],))
+        
     conn.commit()
     conn.close()
 
@@ -48,6 +76,7 @@ def register_user(username, password):
         cursor = conn.cursor()
         hashed = hash_password(password)
         cursor.execute('INSERT INTO users (username, password_hash) VALUES (?, ?)', (username, hashed))
+        cursor.execute("INSERT OR IGNORE INTO group_members (group_id, username) VALUES ('global', ?)", (username,))
         conn.commit()
         conn.close()
         return True, "Registration successful."
@@ -72,14 +101,14 @@ def authenticate_user(username, password):
     except Exception as e:
         return False, str(e)
 
-def save_message(msg_id, username, text, msg_type, file_data, timestamp):
+def save_message(msg_id, username, text, msg_type, file_data, timestamp, group_id='global'):
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         cursor.execute('''
-            INSERT INTO messages (id, username, text, msg_type, file_data, timestamp, is_edited, deleted, read_by)
-            VALUES (?, ?, ?, ?, ?, ?, 0, 0, '[]')
-        ''', (msg_id, username, text, msg_type, file_data, timestamp))
+            INSERT INTO messages (id, username, text, msg_type, file_data, timestamp, is_edited, deleted, read_by, group_id)
+            VALUES (?, ?, ?, ?, ?, ?, 0, 0, '[]', ?)
+        ''', (msg_id, username, text, msg_type, file_data, timestamp, group_id))
         conn.commit()
         conn.close()
         return True
@@ -87,15 +116,16 @@ def save_message(msg_id, username, text, msg_type, file_data, timestamp):
         print(f"DB Error saving message: {e}")
         return False
 
-def get_messages(limit=50):
+def get_messages(group_id='global', limit=50):
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         cursor.execute('''
             SELECT id, username, text, msg_type, file_data, timestamp, is_edited, deleted, read_by 
             FROM messages 
+            WHERE group_id = ? OR group_id IS NULL
             ORDER BY timestamp ASC LIMIT ?
-        ''', (limit,))
+        ''', (group_id, limit,))
         rows = cursor.fetchall()
         conn.close()
         messages = []
@@ -158,5 +188,59 @@ def mark_message_read(msg_id, username):
     except Exception as e:
         print(f"DB Error tracking read receipt: {e}")
         return False
+
+def create_group(group_id, name, creator_username):
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO groups (id, name, created_by) VALUES (?, ?, ?)", (group_id, name, creator_username))
+        cursor.execute("INSERT INTO group_members (group_id, username) VALUES (?, ?)", (group_id, creator_username))
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        print(f"DB Error creating group: {e}")
+        return False
+
+def join_group(group_id, username):
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("INSERT OR IGNORE INTO group_members (group_id, username) VALUES (?, ?)", (group_id, username))
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        print(f"DB Error joining group: {e}")
+        return False
+
+def get_user_groups(username):
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT g.id, g.name 
+            FROM groups g
+            JOIN group_members gm ON g.id = gm.group_id
+            WHERE gm.username = ?
+        ''', (username,))
+        rows = cursor.fetchall()
+        conn.close()
+        return [{"id": r[0], "name": r[1]} for r in rows]
+    except Exception as e:
+        print(f"DB Error fetching user groups: {e}")
+        return []
+
+def get_all_groups():
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, name FROM groups")
+        rows = cursor.fetchall()
+        conn.close()
+        return [{"id": r[0], "name": r[1]} for r in rows]
+    except Exception as e:
+        print(f"DB Error fetching all groups: {e}")
+        return []
 
 initialize_db()

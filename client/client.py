@@ -31,6 +31,9 @@ class ChatClientGUI:
         self.last_typed = 0
         self.typing_timer = None
         self.latest_online_users = []
+        self.active_group_id = 'global'
+        self.user_groups = []
+        self.all_groups = []
         
         self.messages_ui = {} # Map msg_id to a dict of UI widgets 
         
@@ -46,6 +49,8 @@ class ChatClientGUI:
         self.sio.on('message_edited', self.on_message_edited)
         self.sio.on('message_deleted', self.on_message_deleted)
         self.sio.on('message_read', self.on_message_read)
+        self.sio.on('user_groups', self.on_user_groups)
+        self.sio.on('all_groups', self.on_all_groups)
         
         # Setup Main Window
         self.win.title("Mesynk Plus")
@@ -74,7 +79,10 @@ class ChatClientGUI:
         if "token" in data:
             self.token = data.get("token")
             self.username = data.get("username")
+            self.user_groups = data.get("groups", [])
+            self.active_group_id = 'global'
             self.win.after(0, self.build_chat_interface)
+            self.sio.emit('explore_groups')
         else:
             self.win.after(0, lambda m=message: self.error_label.configure(text=m, text_color="#4CAF50"))
             self.win.after(0, self.reset_login_ui)
@@ -95,38 +103,63 @@ class ChatClientGUI:
         if self.gui_done:
             self.win.after(0, lambda u=users: self.update_online_users(u))
 
+    def on_user_groups(self, data):
+        self.user_groups = data.get("groups", [])
+        if self.gui_done:
+            self.win.after(0, self.update_groups_list)
+
+    def on_all_groups(self, data):
+        self.all_groups = data.get("groups", [])
+        if self.gui_done:
+            self.win.after(0, self.update_explore_list)
+
     def on_typing(self, data):
         if self.gui_done:
-            user = data.get("username")
-            self.win.after(0, lambda u=user: self.show_typing(u))
+            if data.get("group_id", "global") == self.active_group_id:
+                user = data.get("username")
+                self.win.after(0, lambda u=user: self.show_typing(u))
 
     def on_history(self, data):
         if self.gui_done:
-            messages = data.get("messages", [])
-            for msg in messages:
-                self.win.after(0, lambda m=msg: self.render_message(m))
+            group_id = data.get("group_id", "global")
+            if group_id == self.active_group_id:
+                self.win.after(0, self._render_history, data.get("messages", []))
+
+    def _render_history(self, messages):
+        for widget in self.msg_list_frame.winfo_children():
+            widget.destroy()
+        self.messages_ui.clear()
+        for msg in messages:
+            self.render_message(msg)
 
     def on_new_message(self, data):
         if self.gui_done:
-            # Play a notification sound if window is not focused or msg from someone else
-            if data['username'] != self.username:
-                try:
-                    winsound.MessageBeep(winsound.MB_ICONASTERISK)
-                except:
-                    pass # non windows platforms or error
+            group_id = data.get("group_id", "global")
+            if group_id != self.active_group_id:
+                if data.get('username') != self.username:
+                    try: winsound.MessageBeep(winsound.MB_ICONASTERISK)
+                    except: pass
+                return
+                
+            if data.get('username') != self.username:
+                try: winsound.MessageBeep(winsound.MB_ICONASTERISK)
+                except: pass
             self.win.after(0, lambda m=data: self.render_message(m))
 
     def on_message_edited(self, data):
         if self.gui_done:
-            self.win.after(0, lambda d=data: self._update_msg_text(d['id'], d['text']))
+            if data.get("group_id", "global") == self.active_group_id:
+                self.win.after(0, lambda d=data: self._update_msg_text(d['id'], d['text']))
 
     def on_message_deleted(self, data):
         if self.gui_done:
-            self.win.after(0, lambda id=data['id']: self._mark_msg_deleted(id))
+            if data.get("group_id", "global") == self.active_group_id:
+                self.win.after(0, lambda id=data['id']: self._mark_msg_deleted(id))
 
     def on_message_read(self, data):
         if self.gui_done:
-            self.win.after(0, lambda id=data['id']: self._update_msg_read(id))
+            if data.get("group_id", "global") == self.active_group_id:
+                self.win.after(0, lambda id=data['id']: self._update_msg_read(id))
 
     def _update_msg_text(self, msg_id, new_text):
         if msg_id in self.messages_ui:
@@ -264,22 +297,50 @@ class ChatClientGUI:
         self.send_button = ctk.CTkButton(input_frame, text="Send", command=self.write, width=90, height=50, corner_radius=20, font=("Inter", 15, "bold"))
         self.send_button.grid(row=0, column=3, sticky="e")
         
-        # Sidebar for Online Users
-        sidebar = ctk.CTkFrame(self.win, fg_color="#1E1E24", corner_radius=15)
+        # Sidebar for Chat Management
+        sidebar = ctk.CTkFrame(self.win, fg_color="#1E1E24", corner_radius=15, width=250)
         sidebar.grid(row=0, column=1, sticky="nsew", padx=(0, 10), pady=10)
-        sidebar.grid_rowconfigure(1, weight=1)
+        sidebar.grid_rowconfigure(0, weight=1)
         sidebar.grid_columnconfigure(0, weight=1)
 
-        self.sidebar_title = ctk.CTkLabel(sidebar, text="Online Users", font=("Inter", 16, "bold"), text_color="#3B8EDB")
-        self.sidebar_title.grid(row=0, column=0, pady=15, sticky="n")
-
-        self.online_users_list = ctk.CTkScrollableFrame(sidebar, fg_color="transparent")
-        self.online_users_list.grid(row=1, column=0, sticky="nsew", padx=5, pady=5)
+        self.tabview = ctk.CTkTabview(sidebar, corner_radius=15)
+        self.tabview.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
+        
+        self.tabview.add("Groups")
+        self.tabview.add("Explore")
+        self.tabview.add("Online")
+        
+        # Groups Tab
+        self.tabview.tab("Groups").grid_rowconfigure(0, weight=0)
+        self.tabview.tab("Groups").grid_rowconfigure(1, weight=1)
+        self.tabview.tab("Groups").grid_columnconfigure(0, weight=1)
+        
+        create_grp_btn = ctk.CTkButton(self.tabview.tab("Groups"), text="+ Create Group", command=self.prompt_create_group, height=30)
+        create_grp_btn.grid(row=0, column=0, sticky="ew", pady=(0, 5))
+        
+        self.groups_list_frame = ctk.CTkScrollableFrame(self.tabview.tab("Groups"), fg_color="transparent")
+        self.groups_list_frame.grid(row=1, column=0, sticky="nsew")
+        
+        # Explore Tab
+        self.tabview.tab("Explore").grid_rowconfigure(0, weight=1)
+        self.tabview.tab("Explore").grid_columnconfigure(0, weight=1)
+        self.explore_list_frame = ctk.CTkScrollableFrame(self.tabview.tab("Explore"), fg_color="transparent")
+        self.explore_list_frame.grid(row=0, column=0, sticky="nsew")
+        
+        # Online Tab
+        self.tabview.tab("Online").grid_rowconfigure(0, weight=1)
+        self.tabview.tab("Online").grid_columnconfigure(0, weight=1)
+        self.online_users_list = ctk.CTkScrollableFrame(self.tabview.tab("Online"), fg_color="transparent")
+        self.online_users_list.grid(row=0, column=0, sticky="nsew")
         self.online_users_labels = []
 
         self.gui_done = True
         self.input_area.focus()
         
+        if hasattr(self, 'user_groups') and self.user_groups:
+            self.update_groups_list()
+        if hasattr(self, 'all_groups') and self.all_groups:
+            self.update_explore_list()
         if hasattr(self, 'latest_online_users') and self.latest_online_users:
             self.update_online_users(self.latest_online_users)
 
@@ -378,7 +439,7 @@ class ChatClientGUI:
         self.win.update_idletasks()
         new_text = dialog.get_input()
         if new_text:
-            self.sio.emit('edit_message', {'id': msg_id, 'text': new_text})
+            self.sio.emit('edit_message', {'id': msg_id, 'text': new_text, 'group_id': self.active_group_id})
 
     def open_file_picker(self):
         filepath = filedialog.askopenfilename(title="Select an Image", filetypes=(("Image files", "*.png *.jpg *.jpeg *.gif"), ("All files", "*.*")))
@@ -387,7 +448,7 @@ class ChatClientGUI:
                 with open(filepath, "rb") as image_file:
                     encoded = base64.b64encode(image_file.read()).decode('utf-8')
                     # Emit it
-                    self.sio.emit('send_message', {'text': f"Shared an image: {os.path.basename(filepath)}", 'msg_type': 'image', 'file_data': encoded})
+                    self.sio.emit('send_message', {'text': f"Shared an image: {os.path.basename(filepath)}", 'msg_type': 'image', 'file_data': encoded, 'group_id': self.active_group_id})
             except Exception as e:
                 self.show_toast(f"Failed to load image: {e}")
 
@@ -446,7 +507,7 @@ class ChatClientGUI:
         
         current_time = time.time()
         if current_time - self.last_typed > 1.5:
-            self.sio.emit('typing', {})
+            self.sio.emit('typing', {'group_id': self.active_group_id})
             self.last_typed = current_time
 
     def write(self):
@@ -454,8 +515,37 @@ class ChatClientGUI:
         
         text = self.input_area.get()
         if text.strip():
-            self.sio.emit('send_message', {'text': text.strip(), 'msg_type': 'text'})
+            self.sio.emit('send_message', {'text': text.strip(), 'msg_type': 'text', 'group_id': self.active_group_id})
             self.input_area.delete(0, 'end')
+
+    def prompt_create_group(self):
+        dialog = ctk.CTkInputDialog(text="Enter group name:", title="Create Group")
+        self.win.update_idletasks()
+        name = dialog.get_input()
+        if name and name.strip():
+            self.sio.emit('create_group', {'name': name.strip()})
+
+    def switch_group(self, group_id, group_name):
+        self.active_group_id = group_id
+        self.win.title(f"Mesynk - Logged in as: {self.username} | {group_name}")
+        self.sio.emit('fetch_history', {'group_id': group_id})
+
+    def update_groups_list(self):
+        for w in self.groups_list_frame.winfo_children():
+            w.destroy()
+        # Ensure 'global' is always logically prominent if present
+        for g in self.user_groups:
+            btn = ctk.CTkButton(self.groups_list_frame, text=g['name'], anchor="w", fg_color="#2b5278" if self.active_group_id == g['id'] else "transparent", text_color="white" if self.active_group_id == g['id'] else "#3B8EDB", hover_color="#2b5278", command=lambda gid=g['id'], gname=g['name']: self.switch_group(gid, gname))
+            btn.pack(fill="x", pady=2)
+
+    def update_explore_list(self):
+        for w in self.explore_list_frame.winfo_children():
+            w.destroy()
+        my_group_ids = [g['id'] for g in self.user_groups]
+        for g in self.all_groups:
+            if g['id'] not in my_group_ids:
+                btn = ctk.CTkButton(self.explore_list_frame, text=f"Join {g['name']}", anchor="w", fg_color="transparent", text_color="#4CAF50", hover_color="#45a049", command=lambda gid=g['id']: self.sio.emit('join_group', {'group_id': gid}))
+                btn.pack(fill="x", pady=2)
 
     def stop(self):
         self.running = False
