@@ -1,3 +1,7 @@
 customtkinter
 python-dotenv
 PyJWT
+python-socketio
+python-socketio[client]
+eventlet
+Pillow

@@ -1,10 +1,15 @@
-import socket
+import socketio
 import threading
 import customtkinter as ctk
 import sys
 import os
 import json
 import time
+import base64
+from io import BytesIO
+import winsound
+from tkinter import filedialog, Menu
+from PIL import Image
 from dotenv import load_dotenv
 
 # Load explicitly handled .env variables
@@ -18,7 +23,7 @@ class ChatClientGUI:
         self.host = host
         self.port = port
         
-        self.client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.sio = socketio.Client()
         self.running = False
         self.gui_done = False
         self.token = None
@@ -27,10 +32,25 @@ class ChatClientGUI:
         self.typing_timer = None
         self.latest_online_users = []
         
+        self.messages_ui = {} # Map msg_id to a dict of UI widgets 
+        
+        self.sio.on('connect', self.on_connect)
+        self.sio.on('disconnect', self.on_disconnect)
+        self.sio.on('auth_success', self.on_auth_success)
+        self.sio.on('auth_error', self.on_auth_error)
+        self.sio.on('sys_msg', self.on_sys_msg)
+        self.sio.on('online_users', self.on_online_users)
+        self.sio.on('typing', self.on_typing)
+        self.sio.on('history', self.on_history)
+        self.sio.on('new_message', self.on_new_message)
+        self.sio.on('message_edited', self.on_message_edited)
+        self.sio.on('message_deleted', self.on_message_deleted)
+        self.sio.on('message_read', self.on_message_read)
+        
         # Setup Main Window
         self.win.title("Mesynk Plus")
-        self.win.geometry("800x600") 
-        self.win.minsize(600, 500)
+        self.win.geometry("900x700") 
+        self.win.minsize(700, 500)
         
         self.win.grid_rowconfigure(0, weight=1)
         self.win.grid_columnconfigure(0, weight=1)
@@ -39,6 +59,96 @@ class ChatClientGUI:
         self.build_login_ui()
         self.win.protocol("WM_DELETE_WINDOW", self.stop)
         self.win.lift()
+
+    def on_connect(self):
+        print("Connected to Socket.IO Server")
+        
+    def on_disconnect(self):
+        print("Disconnected from server")
+        if self.gui_done:
+            self.win.after(0, lambda: self.show_toast("DISCONNECTED FROM SERVER"))
+        self.win.after(0, self.reset_login_ui)
+
+    def on_auth_success(self, data):
+        message = data.get("message", "")
+        if "token" in data:
+            self.token = data.get("token")
+            self.username = data.get("username")
+            self.win.after(0, self.build_chat_interface)
+        else:
+            self.win.after(0, lambda m=message: self.error_label.configure(text=m, text_color="#4CAF50"))
+            self.win.after(0, self.reset_login_ui)
+
+    def on_auth_error(self, data):
+        msg = data.get("message")
+        self.win.after(0, lambda err=msg: self.error_label.configure(text=err, text_color="#FF6B6B"))
+        self.win.after(0, self.reset_login_ui)
+
+    def on_sys_msg(self, data):
+        if self.gui_done:
+            msg = data.get("message")
+            self.win.after(0, lambda m=msg: self.show_toast(m))
+
+    def on_online_users(self, data):
+        users = data.get("users", [])
+        self.latest_online_users = users
+        if self.gui_done:
+            self.win.after(0, lambda u=users: self.update_online_users(u))
+
+    def on_typing(self, data):
+        if self.gui_done:
+            user = data.get("username")
+            self.win.after(0, lambda u=user: self.show_typing(u))
+
+    def on_history(self, data):
+        if self.gui_done:
+            messages = data.get("messages", [])
+            for msg in messages:
+                self.win.after(0, lambda m=msg: self.render_message(m))
+
+    def on_new_message(self, data):
+        if self.gui_done:
+            # Play a notification sound if window is not focused or msg from someone else
+            if data['username'] != self.username:
+                try:
+                    winsound.MessageBeep(winsound.MB_ICONASTERISK)
+                except:
+                    pass # non windows platforms or error
+            self.win.after(0, lambda m=data: self.render_message(m))
+
+    def on_message_edited(self, data):
+        if self.gui_done:
+            self.win.after(0, lambda d=data: self._update_msg_text(d['id'], d['text']))
+
+    def on_message_deleted(self, data):
+        if self.gui_done:
+            self.win.after(0, lambda id=data['id']: self._mark_msg_deleted(id))
+
+    def on_message_read(self, data):
+        if self.gui_done:
+            self.win.after(0, lambda id=data['id']: self._update_msg_read(id))
+
+    def _update_msg_text(self, msg_id, new_text):
+        if msg_id in self.messages_ui:
+            ui = self.messages_ui[msg_id]
+            ui['text_label'].configure(text=new_text + " (edited)")
+
+    def _mark_msg_deleted(self, msg_id):
+        if msg_id in self.messages_ui:
+            ui = self.messages_ui[msg_id]
+            ui['text_label'].configure(text="🚫 This message was deleted", text_color="#7A7A7A")
+            if 'image_label' in ui:
+                ui['image_label'].destroy()
+            if 'edit_btn' in ui:
+                 ui['edit_btn'].destroy()
+            if 'del_btn' in ui:
+                 ui['del_btn'].destroy()
+
+    def _update_msg_read(self, msg_id):
+        if msg_id in self.messages_ui:
+            ui = self.messages_ui[msg_id]
+            if 'status_label' in ui:
+                ui['status_label'].configure(text="✔✔", text_color="#3B8EDB")
 
     def build_login_ui(self):
         if hasattr(self, 'login_frame') and self.login_frame.winfo_exists():
@@ -57,15 +167,15 @@ class ChatClientGUI:
         
         self.password_entry = ctk.CTkEntry(self.login_frame, placeholder_text="Password", width=280, height=50, font=("Inter", 15), show="*")
         self.password_entry.grid(row=2, column=0, pady=10)
-        self.password_entry.bind('<Return>', lambda event: self.start_auth("LOGIN"))
+        self.password_entry.bind('<Return>', lambda event: self.start_auth("login"))
         
         button_frame = ctk.CTkFrame(self.login_frame, fg_color="transparent")
         button_frame.grid(row=3, column=0, pady=10)
         
-        self.login_btn = ctk.CTkButton(button_frame, text="Login", width=135, height=50, font=("Inter", 15, "bold"), command=lambda: self.start_auth("LOGIN"))
+        self.login_btn = ctk.CTkButton(button_frame, text="Login", width=135, height=50, font=("Inter", 15, "bold"), command=lambda: self.start_auth("login"))
         self.login_btn.grid(row=0, column=0, padx=5)
 
-        self.register_btn = ctk.CTkButton(button_frame, text="Register", width=135, height=50, font=("Inter", 15, "bold"), fg_color="#4CAF50", hover_color="#45a049", command=lambda: self.start_auth("REGISTER"))
+        self.register_btn = ctk.CTkButton(button_frame, text="Register", width=135, height=50, font=("Inter", 15, "bold"), fg_color="#4CAF50", hover_color="#45a049", command=lambda: self.start_auth("register"))
         self.register_btn.grid(row=0, column=1, padx=5)
         
         self.error_label = ctk.CTkLabel(self.login_frame, text="", text_color="#FF6B6B", font=("Inter", 13))
@@ -87,24 +197,13 @@ class ChatClientGUI:
         self.win.update_idletasks()
             
         try:
-            # Reconnect if previous connection dropped
-            try:
-                self.client.send(b'')
-            except:
-                self.client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                self.client.connect((self.host, self.port))
+            if not self.sio.connected:
+                self.sio.connect(f"http://{self.host}:{self.port}")
+            self.running = True
             
-            if not self.running:
-                self.running = True
-                threading.Thread(target=self.receive, daemon=True).start()
-            
-            self.send_json({"type": action, "username": username, "password": password})
-            
-        except ConnectionRefusedError:
-            self.error_label.configure(text="Connection Refused! Is server running?", text_color="#FF6B6B")
-            self.reset_login_ui()
+            self.sio.emit(action, {"username": username, "password": password})
         except Exception as e:
-            self.error_label.configure(text=f"Error: {e}", text_color="#FF6B6B")
+            self.error_label.configure(text=f"Connection Error: Is server running?", text_color="#FF6B6B")
             self.reset_login_ui()
 
     def reset_login_ui(self):
@@ -114,19 +213,16 @@ class ChatClientGUI:
             self.username_entry.configure(state="normal")
             self.password_entry.configure(state="normal")
         try:
-            self.client.close()
+            if self.sio.connected:
+                self.sio.disconnect()
             self.running = False
         except:
             pass
 
-    def send_json(self, data):
-        try:
-            self.client.send((json.dumps(data) + '\n').encode('utf-8'))
-        except Exception as e:
-            print(f"Send Error: {e}")
-
     def build_chat_interface(self):
-        self.login_frame.destroy()
+        if hasattr(self, 'login_frame') and self.login_frame.winfo_exists():
+            self.login_frame.destroy()
+            
         self.win.title(f"Mesynk - Logged in as: {self.username}")
         
         self.win.grid_rowconfigure(0, weight=1)
@@ -141,8 +237,9 @@ class ChatClientGUI:
         chat_frame.grid_rowconfigure(2, weight=0)
         chat_frame.grid_columnconfigure(0, weight=1)
 
-        self.text_area = ctk.CTkTextbox(chat_frame, state="disabled", wrap="word", corner_radius=15, font=("Inter", 14), fg_color="#1E1E24")
-        self.text_area.grid(row=0, column=0, columnspan=2, pady=(0, 5), sticky="nsew")
+        # Replaced Textbox with ScrollableFrame
+        self.msg_list_frame = ctk.CTkScrollableFrame(chat_frame, corner_radius=15, fg_color="#1E1E24")
+        self.msg_list_frame.grid(row=0, column=0, columnspan=2, pady=(0, 5), sticky="nsew")
 
         # Typing Indicator
         self.typing_label = ctk.CTkLabel(chat_frame, text="", text_color="#AAAAAA", font=("Inter", 12, "italic"), height=20)
@@ -151,15 +248,21 @@ class ChatClientGUI:
         # Input Area
         input_frame = ctk.CTkFrame(chat_frame, fg_color="transparent")
         input_frame.grid(row=2, column=0, columnspan=2, sticky="ew")
-        input_frame.grid_columnconfigure(0, weight=1)
+        input_frame.grid_columnconfigure(2, weight=1)
+
+        self.attach_btn = ctk.CTkButton(input_frame, text="📎", width=40, height=50, corner_radius=10, font=("Inter", 20), fg_color="#4F4F4F", command=self.open_file_picker)
+        self.attach_btn.grid(row=0, column=0, padx=(0, 5))
+
+        self.emoji_btn = ctk.CTkButton(input_frame, text="😊", width=40, height=50, corner_radius=10, font=("Inter", 20), fg_color="#4F4F4F", command=self.open_emoji_picker)
+        self.emoji_btn.grid(row=0, column=1, padx=(0, 10))
 
         self.input_area = ctk.CTkEntry(input_frame, placeholder_text="Type a message...", corner_radius=20, height=50, font=("Inter", 15))
-        self.input_area.grid(row=0, column=0, padx=(0, 10), sticky="ew")
+        self.input_area.grid(row=0, column=2, padx=(0, 10), sticky="ew")
         self.input_area.bind('<Return>', lambda event: self.write())
         self.input_area.bind('<KeyRelease>', self.on_key_release)
 
         self.send_button = ctk.CTkButton(input_frame, text="Send", command=self.write, width=90, height=50, corner_radius=20, font=("Inter", 15, "bold"))
-        self.send_button.grid(row=0, column=1, sticky="e")
+        self.send_button.grid(row=0, column=3, sticky="e")
         
         # Sidebar for Online Users
         sidebar = ctk.CTkFrame(self.win, fg_color="#1E1E24", corner_radius=15)
@@ -179,6 +282,135 @@ class ChatClientGUI:
         
         if hasattr(self, 'latest_online_users') and self.latest_online_users:
             self.update_online_users(self.latest_online_users)
+
+    def render_message(self, msg):
+        msg_id = msg['id']
+        username = msg['username']
+        text = msg['text']
+        ts = msg['timestamp']
+        is_edited = msg.get('is_edited', False)
+        deleted = msg.get('deleted', False)
+        msg_type = msg.get('msg_type', 'text')
+        file_data = msg.get('file_data')
+        read_by = msg.get('read_by', [])
+        
+        is_mine = (username == self.username)
+        align = "e" if is_mine else "w"
+        color = "#2b5278" if is_mine else "#3A3A3C"
+        
+        container = ctk.CTkFrame(self.msg_list_frame, fg_color="transparent")
+        container.pack(fill="x", padx=10, pady=5)
+        
+        bubble = ctk.CTkFrame(container, fg_color=color, corner_radius=15)
+        bubble.pack(side="right" if is_mine else "left", padx=5, pady=2, ipadx=10, ipady=5)
+        
+        # Metadata (Username & Time)
+        meta_text = ts if is_mine else f"{username} • {ts}"
+        meta_label = ctk.CTkLabel(bubble, text=meta_text, text_color="#AAAAAA", font=("Inter", 10))
+        meta_label.pack(anchor="w" if not is_mine else "e", padx=5)
+
+        ui_elements = {}
+
+        if deleted:
+            text_label = ctk.CTkLabel(bubble, text="🚫 This message was deleted", text_color="#7A7A7A", font=("Inter", 14, "italic"), wraplength=400, justify="left")
+            text_label.pack(anchor="w", padx=5, pady=(2, 0))
+            ui_elements['text_label'] = text_label
+        else:
+            if msg_type == 'image' and file_data:
+                try:
+                    img_bytes = base64.b64decode(file_data)
+                    img = Image.open(BytesIO(img_bytes))
+                    img.thumbnail((300, 300))
+                    ctk_img = ctk.CTkImage(light_image=img, dark_image=img, size=(img.width, img.height))
+                    img_label = ctk.CTkLabel(bubble, image=ctk_img, text="")
+                    img_label.pack(padx=5, pady=5)
+                    ui_elements['image_label'] = img_label
+                except Exception as e:
+                    print(f"Error reading image logic: {e}")
+            
+            main_text = text + (" (edited)" if is_edited else "")
+            text_label = ctk.CTkLabel(bubble, text=main_text, font=("Inter", 14), wraplength=400, justify="left" if not is_mine else "right")
+            text_label.pack(anchor="w" if not is_mine else "e", padx=5, pady=2)
+            ui_elements['text_label'] = text_label
+
+            # Read Receipts
+            if is_mine:
+                # "✔✔" logic
+                read_str = "✔✔" if len(read_by) > 0 else "✔"
+                status_color = "#3B8EDB" if len(read_by) > 0 else "#AAAAAA"
+                status_label = ctk.CTkLabel(bubble, text=read_str, font=("Inter", 10), text_color=status_color)
+                status_label.pack(anchor="e", padx=5)
+                ui_elements['status_label'] = status_label
+            else:
+                # Mark as read if not ours
+                if self.username not in read_by:
+                    self.sio.emit('mark_read', {'id': msg_id})
+
+            # Edit/Delete Buttons
+            if is_mine:
+                actions_frame = ctk.CTkFrame(bubble, fg_color="transparent")
+                actions_frame.pack(anchor="e", padx=5, pady=(2,0))
+                
+                edit_btn = ctk.CTkButton(actions_frame, text="Edit", width=30, height=20, font=("Inter", 10), fg_color="#4F4F4F", command=lambda id=msg_id: self.prompt_edit_message(id))
+                edit_btn.pack(side="left", padx=2)
+                
+                del_btn = ctk.CTkButton(actions_frame, text="Delete", width=40, height=20, font=("Inter", 10), fg_color="#FF4C4C", hover_color="#E03A3A", command=lambda id=msg_id: self.sio.emit('delete_message', {'id': id}))
+                del_btn.pack(side="left", padx=2)
+                
+                ui_elements['edit_btn'] = edit_btn
+                ui_elements['del_btn'] = del_btn
+
+        self.messages_ui[msg_id] = ui_elements
+        
+        # Scroll to bottom
+        self.msg_list_frame.update_idletasks()
+        try:
+            self.msg_list_frame._parent_canvas.yview_moveto(1.0)
+        except Exception:
+            pass
+        
+        # Setup typing clearing
+        if not is_mine:
+            self.typing_label.configure(text="")
+
+    def prompt_edit_message(self, msg_id):
+        dialog = ctk.CTkInputDialog(text="Type new message:", title="Edit Message")
+        self.win.update_idletasks()
+        new_text = dialog.get_input()
+        if new_text:
+            self.sio.emit('edit_message', {'id': msg_id, 'text': new_text})
+
+    def open_file_picker(self):
+        filepath = filedialog.askopenfilename(title="Select an Image", filetypes=(("Image files", "*.png *.jpg *.jpeg *.gif"), ("All files", "*.*")))
+        if filepath:
+            try:
+                with open(filepath, "rb") as image_file:
+                    encoded = base64.b64encode(image_file.read()).decode('utf-8')
+                    # Emit it
+                    self.sio.emit('send_message', {'text': f"Shared an image: {os.path.basename(filepath)}", 'msg_type': 'image', 'file_data': encoded})
+            except Exception as e:
+                self.show_toast(f"Failed to load image: {e}")
+
+    def open_emoji_picker(self):
+        picker = ctk.CTkToplevel(self.win)
+        picker.title("Emoji")
+        picker.geometry("280x200")
+        picker.attributes("-topmost", True)
+        
+        emojis = ["😀","😂","😍","😎","😢","😡","👍","👎","🔥","❤️","🎉","🤔","👌","🙌","✨"]
+        
+        frame = ctk.CTkFrame(picker, fg_color="transparent")
+        frame.pack(padx=10, pady=10, fill="both", expand=True)
+        
+        for i, emp in enumerate(emojis):
+            r, c = divmod(i, 5)
+            btn = ctk.CTkButton(frame, text=emp, width=40, height=40, font=("Inter", 20), fg_color="transparent", command=lambda e=emp: self.insert_emoji(e, picker))
+            btn.grid(row=r, column=c, padx=2, pady=2)
+
+    def insert_emoji(self, emoji, window):
+        self.input_area.insert("end", emoji)
+        window.destroy()
+        self.input_area.focus()
 
     def update_online_users(self, users):
         if not self.gui_done: return
@@ -208,91 +440,13 @@ class ChatClientGUI:
         toast.place(relx=0.5, rely=0.05, anchor="n")
         self.win.after(3000, toast.destroy)
 
-    def receive(self):
-        buffer = ""
-        while self.running:
-            try:
-                data = self.client.recv(1024)
-                if not data: break
-                
-                buffer += data.decode('utf-8')
-                while '\n' in buffer:
-                    line, buffer = buffer.split('\n', 1)
-                    line = line.strip()
-                    if not line: continue
-                    
-                    try:
-                        payload = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-
-                    msg_type = payload.get("type")
-
-                    if msg_type == "AUTH_SUCCESS":
-                        message = payload.get("message", "")
-                        if payload.get("token"):
-                            self.token = payload.get("token")
-                            self.username = payload.get("username")
-                            self.win.after(0, self.build_chat_interface)
-                        else:
-                            # Registration success
-                            self.win.after(0, lambda m=message: self.error_label.configure(text=m, text_color="#4CAF50"))
-                            self.win.after(0, self.reset_login_ui)
-
-                    elif msg_type == "AUTH_ERROR":
-                        msg = payload.get("message")
-                        self.win.after(0, lambda err=msg: self.error_label.configure(text=err, text_color="#FF6B6B"))
-                        self.win.after(0, self.reset_login_ui)
-
-                    elif msg_type == "MSG":
-                        if self.gui_done:
-                            user = payload.get('username')
-                            text = payload.get('text')
-                            ts = payload.get('timestamp')
-                            formatted_msg = f"[{ts}] {user}: {text}\n\n"
-                            
-                            def update_text(m=formatted_msg):
-                                self.text_area.configure(state="normal")
-                                self.text_area.insert('end', m)
-                                self.text_area.yview('end')
-                                self.text_area.configure(state="disabled")
-                            
-                            self.win.after(0, update_text)
-                            
-                            if user != self.username:
-                                self.win.after(0, lambda: self.typing_label.configure(text=""))
-
-                    elif msg_type == "SYS_MSG":
-                        if self.gui_done:
-                            msg = payload.get("message")
-                            self.win.after(0, lambda m=msg: self.show_toast(m))
-
-                    elif msg_type == "ONLINE_USERS":
-                        users = payload.get("users", [])
-                        self.latest_online_users = users
-                        if self.gui_done:
-                            self.win.after(0, lambda u=users: self.update_online_users(u))
-
-                    elif msg_type == "TYPING":
-                        if self.gui_done:
-                            user = payload.get("username")
-                            self.win.after(0, lambda u=user: self.show_typing(u))
-
-            except Exception as e:
-                print(f"Disconnected: {e}")
-                if self.gui_done:
-                    self.win.after(0, lambda: self.show_toast("DISCONNECTED FROM SERVER"))
-                self.win.after(0, self.reset_login_ui)
-                break
-
     def on_key_release(self, event):
         if not self.gui_done: return
-        # Don't trigger typing for "Enter" key
         if event.keysym == 'Return': return
         
         current_time = time.time()
         if current_time - self.last_typed > 1.5:
-            self.send_json({"type": "TYPING"})
+            self.sio.emit('typing', {})
             self.last_typed = current_time
 
     def write(self):
@@ -300,16 +454,17 @@ class ChatClientGUI:
         
         text = self.input_area.get()
         if text.strip():
-            self.send_json({"type": "MSG", "text": text.strip()})
+            self.sio.emit('send_message', {'text': text.strip(), 'msg_type': 'text'})
             self.input_area.delete(0, 'end')
 
     def stop(self):
         self.running = False
-        self.win.destroy()
         try:
-            self.client.close()
+            if self.sio.connected:
+                self.sio.disconnect()
         except:
             pass
+        self.win.destroy()
         sys.exit(0)
 
 if __name__ == "__main__":

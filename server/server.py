@@ -1,8 +1,9 @@
-import socket
-import threading
+import eventlet
+import socketio
 import os
 import json
 import jwt
+import uuid
 from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 import database
@@ -14,158 +15,145 @@ HOST = os.getenv('HOST', '127.0.0.1')
 PORT = int(os.getenv('PORT', 55555))
 JWT_SECRET = os.getenv('JWT_SECRET', 'super_secret_jwt_key_for_testing')
 
-# Mapping of client socket object to username
+sio = socketio.Server(cors_allowed_origins='*')
+app = socketio.WSGIApp(sio)
+
+# Map sid -> username
 clients = {}
 
-def broadcast(message_dict):
-    """Broadcast a JSON message to all connected clients."""
-    msg_str = json.dumps(message_dict) + '\n'
-    for client in list(clients.keys()):
-        try:
-            client.send(msg_str.encode('utf-8'))
-        except Exception as e:
-            print(f"Error broadcasting to a client: {e}")
+def get_online_users():
+    return list(clients.values())
 
 def broadcast_online_users():
-    users = list(clients.values())
-    broadcast({"type": "ONLINE_USERS", "users": users})
+    sio.emit('online_users', {'users': get_online_users()})
 
-def handle_client(client, address):
-    # Buffer for partial JSON messages
-    buffer = ""
-    authenticated_username = None
+@sio.event
+def connect(sid, environ, auth):
+    print(f"Client connected: {sid}")
 
-    def send_json(data):
-        client.send((json.dumps(data) + '\n').encode('utf-8'))
-
-    while True:
-        try:
-            data = client.recv(1024)
-            if not data:
-                break
-            
-            buffer += data.decode('utf-8')
-            while '\n' in buffer:
-                line, buffer = buffer.split('\n', 1)
-                line = line.strip()
-                if not line:
-                    continue
-                
-                try:
-                    payload = json.loads(line)
-                except json.JSONDecodeError:
-                    print(f"Invalid JSON received: {line}")
-                    continue
-
-                msg_type = payload.get("type")
-
-                if msg_type == "REGISTER":
-                    username = payload.get("username")
-                    password = payload.get("password")
-                    success, msg = database.register_user(username, password)
-                    if success:
-                        send_json({"type": "AUTH_SUCCESS", "message": "Registered successfully. Please login."})
-                    else:
-                        send_json({"type": "AUTH_ERROR", "message": msg})
-
-                elif msg_type == "LOGIN":
-                    username = payload.get("username")
-                    password = payload.get("password")
-                    success, msg = database.authenticate_user(username, password)
-                    if success:
-                        # Generate JWT
-                        token = jwt.encode({
-                            "username": username,
-                            "exp": datetime.now(timezone.utc) + timedelta(hours=24)
-                        }, JWT_SECRET, algorithm="HS256")
-                        
-                        authenticated_username = username
-                        clients[client] = username
-                        send_json({"type": "AUTH_SUCCESS", "token": token, "username": username})
-                        
-                        # System Message
-                        broadcast({"type": "SYS_MSG", "message": f"{username} has joined the chat!"})
-                        broadcast_online_users()
-                    else:
-                        send_json({"type": "AUTH_ERROR", "message": msg})
-
-                elif msg_type == "AUTH":
-                    token = payload.get("token")
-                    try:
-                        decoded = jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
-                        username = decoded.get("username")
-                        authenticated_username = username
-                        clients[client] = username
-                        send_json({"type": "AUTH_SUCCESS", "token": token, "username": username})
-                        
-                        broadcast({"type": "SYS_MSG", "message": f"{username} has joined the chat!"})
-                        broadcast_online_users()
-                    except jwt.ExpiredSignatureError:
-                        send_json({"type": "AUTH_ERROR", "message": "Session expired. Please log in again."})
-                    except jwt.InvalidTokenError:
-                        send_json({"type": "AUTH_ERROR", "message": "Invalid token. Please log in again."})
-
-                elif msg_type == "MSG":
-                    if authenticated_username:
-                        text = payload.get("text")
-                        timestamp = datetime.now().strftime('%H:%M')
-                        broadcast({
-                            "type": "MSG",
-                            "username": authenticated_username,
-                            "text": text,
-                            "timestamp": timestamp
-                        })
-
-                elif msg_type == "TYPING":
-                    if authenticated_username:
-                        broadcast({
-                            "type": "TYPING",
-                            "username": authenticated_username
-                        })
-
-        except Exception as e:
-            print(f"Error handling client {address}: {e}")
-            break
-
-    # Clean up on disconnect
-    if client in clients:
-        username = clients[client]
-        del clients[client]
-        # Notify others
-        broadcast({"type": "SYS_MSG", "message": f"{username} has left the chat!"})
+@sio.event
+def disconnect(sid):
+    print(f"Client disconnected: {sid}")
+    if sid in clients:
+        username = clients[sid]
+        del clients[sid]
+        sio.emit('sys_msg', {'message': f"{username} has left the chat!"})
         broadcast_online_users()
+
+@sio.event
+def register(sid, data):
+    username = data.get("username")
+    password = data.get("password")
+    success, msg = database.register_user(username, password)
+    if success:
+        sio.emit('auth_success', {"message": "Registered successfully. Please login."}, to=sid)
+    else:
+        sio.emit('auth_error', {"message": msg}, to=sid)
+
+@sio.event
+def login(sid, data):
+    username = data.get("username")
+    password = data.get("password")
+    success, msg = database.authenticate_user(username, password)
+    if success:
+        token = jwt.encode({
+            "username": username,
+            "exp": datetime.now(timezone.utc) + timedelta(hours=24)
+        }, JWT_SECRET, algorithm="HS256")
+        
+        clients[sid] = username
+        sio.emit('auth_success', {"token": token, "username": username}, to=sid)
+        
+        sio.emit('sys_msg', {'message': f"{username} has joined the chat!"})
+        broadcast_online_users()
+        
+        # Send message history
+        history = database.get_messages(limit=100)
+        sio.emit('history', {'messages': history}, to=sid)
+    else:
+        sio.emit('auth_error', {"message": msg}, to=sid)
+
+@sio.event
+def auth_token(sid, data):
+    token = data.get("token")
     try:
-        client.close()
-    except:
-        pass
+        decoded = jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
+        username = decoded.get("username")
+        clients[sid] = username
+        sio.emit('auth_success', {"token": token, "username": username}, to=sid)
+        
+        sio.emit('sys_msg', {'message': f"{username} has joined the chat!"})
+        broadcast_online_users()
+        
+        # Send message history
+        history = database.get_messages(limit=100)
+        sio.emit('history', {'messages': history}, to=sid)
+    except jwt.ExpiredSignatureError:
+        sio.emit('auth_error', {"message": "Session expired. Please log in again."}, to=sid)
+    except jwt.InvalidTokenError:
+        sio.emit('auth_error', {"message": "Invalid token. Please log in again."}, to=sid)
 
-def receive():
-    while True:
-        try:
-            client, address = server.accept()
-            print(f'Connected with {str(address)}')
-            thread = threading.Thread(target=handle_client, args=(client, address))
-            thread.daemon = True
-            thread.start()
-        except KeyboardInterrupt:
-            print("\nShutting down server...")
-            break
-        except Exception as e:
-            print(f"Server accept error: {e}")
-            break
+@sio.event
+def send_message(sid, data):
+    if sid not in clients:
+        return
+    username = clients[sid]
+    text = data.get("text", "")
+    msg_type = data.get("msg_type", "text")
+    file_data = data.get("file_data")
+    
+    timestamp = datetime.now().strftime('%H:%M')
+    msg_id = str(uuid.uuid4())
+    
+    # Save to db
+    database.save_message(msg_id, username, text, msg_type, file_data, timestamp)
+    
+    msg_obj = {
+        "id": msg_id,
+        "username": username,
+        "text": text,
+        "msg_type": msg_type,
+        "file_data": file_data,
+        "timestamp": timestamp,
+        "is_edited": False,
+        "deleted": False,
+        "read_by": []
+    }
+    sio.emit('new_message', msg_obj)
 
-# Set up server
-server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+@sio.event
+def edit_message(sid, data):
+    if sid not in clients:
+        return
+    msg_id = data.get("id")
+    new_text = data.get("text")
+    if database.update_message(msg_id, new_text):
+        sio.emit('message_edited', {"id": msg_id, "text": new_text})
 
-try:
-    server.bind((HOST, PORT))
-    server.listen()
-    print(f"[SERVER STARTED] Listening heavily on {HOST}:{PORT}...")
-    receive()
-except Exception as e:
-    print(f"Failed to start server: {e}")
-except KeyboardInterrupt:
-    print("Server stopped")
-finally:
-    server.close()
+@sio.event
+def delete_message(sid, data):
+    if sid not in clients:
+        return
+    msg_id = data.get("id")
+    if database.delete_message(msg_id):
+        # Notify clients about deleted msg
+        sio.emit('message_deleted', {"id": msg_id})
+
+@sio.event
+def mark_read(sid, data):
+    if sid not in clients:
+        return
+    username = clients[sid]
+    msg_id = data.get("id")
+    if database.mark_message_read(msg_id, username):
+        sio.emit('message_read', {"id": msg_id, "username": username})
+
+@sio.event
+def typing(sid, data):
+    if sid in clients:
+        username = clients[sid]
+        sio.emit('typing', {"username": username}, skip_sid=sid)
+
+if __name__ == '__main__':
+    print(f"[SERVER STARTED] Listening heavily on {HOST}:{PORT} using Socket.IO...")
+    eventlet.wsgi.server(eventlet.listen((HOST, PORT)), app)
