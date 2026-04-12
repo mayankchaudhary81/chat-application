@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: socket-chat-server
+    env: docker
+    dockerfilePath: ./server/Dockerfile
+    region: oregon
+    plan: free
+    disk:
+      name: sqlite-data
+      mountPath: /app/server
+      sizeGB: 1
+    envVars:
+      - key: PORT
+        value: 55555
+      - key: HOST
+        value: 0.0.0.0
+      - key: JWT_SECRET
+        generateValue: true

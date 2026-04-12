@@ -4,6 +4,7 @@ import os
 import json
 import jwt
 import uuid
+import time
 from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 import database
@@ -15,7 +16,30 @@ HOST = os.getenv('HOST', '127.0.0.1')
 PORT = int(os.getenv('PORT', 55555))
 JWT_SECRET = os.getenv('JWT_SECRET', 'super_secret_jwt_key_for_testing')
 
-sio = socketio.Server(cors_allowed_origins='*')
+class RateLimiter:
+    def __init__(self, max_requests, time_window):
+        self.max_requests = max_requests
+        self.time_window = time_window
+        self.clients = {}
+
+    def is_allowed(self, client_id):
+        current_time = time.time()
+        if client_id not in self.clients:
+            self.clients[client_id] = []
+        
+        self.clients[client_id] = [t for t in self.clients[client_id] if current_time - t < self.time_window]
+        
+        if len(self.clients[client_id]) >= self.max_requests:
+            return False
+            
+        self.clients[client_id].append(current_time)
+        return True
+
+auth_limiter = RateLimiter(10, 60)
+message_limiter = RateLimiter(30, 60)
+MAX_PAYLOAD_SIZE = 5 * 1024 * 1024
+
+sio = socketio.Server(cors_allowed_origins='*', max_http_buffer_size=MAX_PAYLOAD_SIZE)
 app = socketio.WSGIApp(sio)
 
 # Map sid -> username
@@ -45,6 +69,9 @@ def disconnect(sid):
 
 @sio.event
 def register(sid, data):
+    if not auth_limiter.is_allowed(sid):
+        sio.emit('auth_error', {"message": "Too many requests. Please wait a minute."}, to=sid)
+        return
     username = data.get("username")
     password = data.get("password")
     success, msg = database.register_user(username, password)
@@ -71,6 +98,9 @@ def setup_user_session(sid, username):
 
 @sio.event
 def login(sid, data):
+    if not auth_limiter.is_allowed(sid):
+        sio.emit('auth_error', {"message": "Too many requests. Please wait a minute."}, to=sid)
+        return
     username = data.get("username")
     password = data.get("password")
     success, msg = database.authenticate_user(username, password)
@@ -100,6 +130,9 @@ def auth_token(sid, data):
 
 @sio.event
 def send_message(sid, data):
+    if not message_limiter.is_allowed(sid):
+        sio.emit('sys_msg', {"message": "You are sending messages too fast! Rate limit applied."}, to=sid)
+        return
     if sid not in clients:
         return
     username = clients[sid]
@@ -200,6 +233,39 @@ def explore_groups(sid, data=None):
     if sid not in clients: return
     all_groups = database.get_all_groups()
     sio.emit('all_groups', {"groups": all_groups}, to=sid)
+
+@sio.event
+def search_messages(sid, data):
+    if sid not in clients: return
+    query = data.get("query")
+    group_id = data.get("group_id", "global")
+    results = database.search_messages_db(group_id, query)
+    sio.emit('search_results_messages', {"results": results, "query": query}, to=sid)
+
+@sio.event
+def search_users(sid, data):
+    if sid not in clients: return
+    query = data.get("query")
+    results = database.search_users_db(query)
+    sio.emit('search_results_users', {"results": results, "query": query}, to=sid)
+
+@sio.event
+def update_avatar(sid, data):
+    if not auth_limiter.is_allowed(sid):
+        sio.emit('sys_msg', {'message': "Rate limit exceeded. Try again later."}, to=sid)
+        return
+    if sid not in clients: return
+    username = clients[sid]
+    file_data = data.get("file_data")
+    if database.update_avatar(username, file_data):
+        sio.emit('avatar_updated', {"username": username, "success": True}, to=sid)
+
+@sio.event
+def fetch_profile(sid, data):
+    if sid not in clients: return
+    username = data.get("username")
+    profile = database.get_user_profile(username)
+    sio.emit('profile_data', {"profile": profile}, to=sid)
 
 if __name__ == '__main__':
     print(f"[SERVER STARTED] Listening heavily on {HOST}:{PORT} using Socket.IO...")

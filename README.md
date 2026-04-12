@@ -1,24 +1,37 @@
 # Mesynk 🚀
 
-A modern, fast, and secure real-time chat application built with Python. 
-This project demonstrates robust network programming (via Sockets), multi-threading, environment configuration, and modern desktop UI design using CustomTkinter.
+A modern, fast, and robust real-time chat application built with Python. Developed over a comprehensive **30-Day Networking Roadmap**, this project evolves from a simple networking experiment into a production-ready communication platform incorporating modern features, containerization, and advanced UI/UX.
 
-## 🌟 Features
-- **Client-Server Architecture**: Dedicated servers capable of handling asynchronous multi-user communication.
-- **Modern UI**: Dark-mode natively styled using `customtkinter`, featuring fluid connection loading states, animated in-app toast notifications, and aesthetic chat interfaces.
-- **Robust Error Handling**: Graceful client and server disconnects without crashed sockets or application hangs.
-- **Environment Driven Settings**: Hidden system variables (ports and IPs) securely abstracted in `.env` configurations.
+## 🌟 Features Achieved
+- **WebSockets / Socket.IO Integration**: Transitioned from raw sockets to event-driven Socket.IO handling for resilient asynchronous communication.
+- **JWT Authentication & Security**: Complete secure login system featuring password hashing (PBKDF2) alongside JWT for persistent session tracking. Server-side Rate limiting prevents API abuse and DoS.
+- **Advanced Chat Capabilities**:
+  - Global & Private Group Chats
+  - Full Message Management (Edit / Delete)
+  - Picture and File Sharing
+  - Read Receipts and Real-Time Typing Indicators
+  - Message and User Search Capabilities
+- **Modern UI / UX**: Beautifully dark-themed graphical interface built dynamically with `customtkinter`. Features fluid connection loading states, avatar uploading, animated toast notifications, and slick integrated tab management.
+- **Database Modularity**: Seamless integration with SQLite using robust multi-table schemas covering users, messages, groups, and members.
+- **Docker-Ready**: Packaged with a complete `Dockerfile` and `render.yaml` Blueprint for 1-click cloud deployments (see `DEPLOYMENT.md`).
 
 ## 🛠️ Architecture & Project Structure
-The application is strictly separated into the backend `server/` node and the interactive `client/` graphical interface:
+The application is strictly separated into a headless backend `server/` node and an interactive `client/` graphical interface:
 ```text
 ├── client/
-│   └── client.py      # GUI and Socket Logic for users
+│   └── client.py        # GUI, Socket.IO client logic, Tab & Event Mapping
 ├── server/
-│   └── server.py      # Socket server, connection handler and broadcaster
-├── .env               # Environment configurations
-├── requirements.txt   # Dependency list
-└── README.md          # Documentation
+│   ├── server.py        # Main WSGI Server (Socket.IO + Eventlet) 
+│   ├── database.py      # SQLite3 operations, queries, database init
+│   └── Dockerfile       # Container definition for the node
+├── tests/
+│   └── test_database.py # Baseline database unit test suite
+├── .env                 # Environment variables configuration
+├── requirements.txt     # Python Dependencies array
+├── render.yaml          # Render Cloud Blueprint Setup
+├── docker-compose.yml   # Containerized local application stack
+├── DEPLOYMENT.md        # Deployment and hosting guidelines
+└── README.md            # You are here!
 ```
 
 ## ⚙️ Installation & Usage
@@ -29,7 +42,7 @@ pip install -r requirements.txt
 ```
 
 **2. Configure your environment:**
-Open the `.env` file and set your networking preferences.
+Review the `.env` file (if provided) and confirm your networking preferences.
 ```env
 HOST=127.0.0.1
 PORT=55555
@@ -46,8 +59,14 @@ Open a new terminal window and launch a UI client.
 ```bash
 python client/client.py
 ```
-*(You can open as many clients as you want to simulate multiple users!)*
+*(You can launch `client.py` as many times as you want to simulate multiple concurrent users!)*
+
+**5. Running Unit Tests:**
+To ensure your core infrastructure remains solid, a test suite has been provided covering database operations. You can trigger tests locally:
+```bash
+python -m unittest discover tests
+```
 
 ---
 
-*This project was heavily refactored over a comprehensive 7-day sprint targeting file restructuring, environment safety, UI polish, and error resilience to mirror modern enterprise standards.*
+*This application marks the successful milestone of the demanding 30-Day Python Socket/Network Roadmap. It bridges the gap between learning theoretical sockets and implementing scalable, fully-featured desktop/web systems.*

@@ -51,6 +51,12 @@ class ChatClientGUI:
         self.sio.on('message_read', self.on_message_read)
         self.sio.on('user_groups', self.on_user_groups)
         self.sio.on('all_groups', self.on_all_groups)
+        self.sio.on('search_results_messages', self.on_search_results_messages)
+        self.sio.on('search_results_users', self.on_search_results_users)
+        self.sio.on('avatar_updated', self.on_avatar_updated)
+        self.sio.on('profile_data', self.on_profile_data)
+        
+        self.my_avatar_data = None
         
         # Setup Main Window
         self.win.title("Mesynk Plus")
@@ -112,6 +118,27 @@ class ChatClientGUI:
         self.all_groups = data.get("groups", [])
         if self.gui_done:
             self.win.after(0, self.update_explore_list)
+
+    def on_search_results_messages(self, data):
+        if self.gui_done:
+            self.win.after(0, lambda d=data: self.display_search_results(d, 'messages'))
+
+    def on_search_results_users(self, data):
+        if self.gui_done:
+            self.win.after(0, lambda d=data: self.display_search_results(d, 'users'))
+
+    def on_avatar_updated(self, data):
+        if self.gui_done and data.get("username") == self.username:
+            if data.get("success"):
+                self.win.after(0, lambda: self.show_toast("Avatar updated successfully!"))
+            self.sio.emit('fetch_profile', {'username': self.username})
+
+    def on_profile_data(self, data):
+        if self.gui_done:
+            profile = data.get("profile", {})
+            if profile and profile.get("username") == self.username:
+                self.my_avatar_data = profile.get("avatar")
+                self.win.after(0, self.update_profile_ui)
 
     def on_typing(self, data):
         if self.gui_done:
@@ -271,7 +298,7 @@ class ChatClientGUI:
         chat_frame.grid_columnconfigure(0, weight=1)
 
         # Replaced Textbox with ScrollableFrame
-        self.msg_list_frame = ctk.CTkScrollableFrame(chat_frame, corner_radius=15, fg_color="#1E1E24")
+        self.msg_list_frame = ctk.CTkScrollableFrame(chat_frame, corner_radius=15, fg_color=("gray90", "#1E1E24"))
         self.msg_list_frame.grid(row=0, column=0, columnspan=2, pady=(0, 5), sticky="nsew")
 
         # Typing Indicator
@@ -298,9 +325,10 @@ class ChatClientGUI:
         self.send_button.grid(row=0, column=3, sticky="e")
         
         # Sidebar for Chat Management
-        sidebar = ctk.CTkFrame(self.win, fg_color="#1E1E24", corner_radius=15, width=250)
+        sidebar = ctk.CTkFrame(self.win, fg_color=("gray90", "#1E1E24"), corner_radius=15, width=250)
         sidebar.grid(row=0, column=1, sticky="nsew", padx=(0, 10), pady=10)
         sidebar.grid_rowconfigure(0, weight=1)
+        sidebar.grid_rowconfigure(1, weight=0)
         sidebar.grid_columnconfigure(0, weight=1)
 
         self.tabview = ctk.CTkTabview(sidebar, corner_radius=15)
@@ -309,6 +337,8 @@ class ChatClientGUI:
         self.tabview.add("Groups")
         self.tabview.add("Explore")
         self.tabview.add("Online")
+        self.tabview.add("Search")
+        self.tabview.add("Profile")
         
         # Groups Tab
         self.tabview.tab("Groups").grid_rowconfigure(0, weight=0)
@@ -333,6 +363,41 @@ class ChatClientGUI:
         self.online_users_list = ctk.CTkScrollableFrame(self.tabview.tab("Online"), fg_color="transparent")
         self.online_users_list.grid(row=0, column=0, sticky="nsew")
         self.online_users_labels = []
+
+        # Search Tab
+        self.tabview.tab("Search").grid_rowconfigure(0, weight=0)
+        self.tabview.tab("Search").grid_rowconfigure(1, weight=1)
+        self.tabview.tab("Search").grid_columnconfigure(0, weight=1)
+
+        search_top = ctk.CTkFrame(self.tabview.tab("Search"), fg_color="transparent")
+        search_top.grid(row=0, column=0, sticky="ew")
+        search_top.grid_columnconfigure(0, weight=1)
+        
+        self.search_entry = ctk.CTkEntry(search_top, placeholder_text="Search...")
+        self.search_entry.grid(row=0, column=0, sticky="ew", padx=(0, 5))
+        
+        search_btn_frame = ctk.CTkFrame(search_top, fg_color="transparent")
+        search_btn_frame.grid(row=1, column=0, sticky="ew", pady=5)
+        search_btn_frame.grid_columnconfigure((0, 1), weight=1)
+        
+        ctk.CTkButton(search_btn_frame, text="Messages", height=25, command=self.do_search_messages).grid(row=0, column=0, padx=(0, 2), sticky="ew")
+        ctk.CTkButton(search_btn_frame, text="Users", height=25, command=self.do_search_users).grid(row=0, column=1, padx=(2, 0), sticky="ew")
+
+        self.search_results_frame = ctk.CTkScrollableFrame(self.tabview.tab("Search"), fg_color="transparent")
+        self.search_results_frame.grid(row=1, column=0, sticky="nsew")
+
+        # Profile Tab
+        self.tabview.tab("Profile").grid_rowconfigure(0, weight=0)
+        self.tabview.tab("Profile").grid_rowconfigure(1, weight=0)
+        self.tabview.tab("Profile").grid_columnconfigure(0, weight=1)
+
+        self.profile_avatar_label = ctk.CTkLabel(self.tabview.tab("Profile"), text="No Avatar", width=100, height=100, fg_color=("gray80", "#333333"), corner_radius=50)
+        self.profile_avatar_label.grid(row=0, column=0, pady=20)
+        
+        ctk.CTkButton(self.tabview.tab("Profile"), text="Upload Avatar", command=self.do_upload_avatar).grid(row=1, column=0, pady=5)
+        
+        self.theme_btn = ctk.CTkButton(sidebar, text="Toggle Theme 🌙", command=self.toggle_theme, fg_color="transparent", text_color=("black", "white"), border_width=1)
+        self.theme_btn.grid(row=1, column=0, pady=10, padx=10, sticky="ew")
 
         self.gui_done = True
         self.input_area.focus()
@@ -546,6 +611,68 @@ class ChatClientGUI:
             if g['id'] not in my_group_ids:
                 btn = ctk.CTkButton(self.explore_list_frame, text=f"Join {g['name']}", anchor="w", fg_color="transparent", text_color="#4CAF50", hover_color="#45a049", command=lambda gid=g['id']: self.sio.emit('join_group', {'group_id': gid}))
                 btn.pack(fill="x", pady=2)
+
+    def toggle_theme(self):
+        current = ctk.get_appearance_mode()
+        if current == "Dark":
+            ctk.set_appearance_mode("Light")
+            self.theme_btn.configure(text="Toggle Theme ☀️", text_color=("black", "white"))
+        else:
+            ctk.set_appearance_mode("Dark")
+            self.theme_btn.configure(text="Toggle Theme 🌙", text_color=("black", "white"))
+
+    def do_search_messages(self):
+        q = self.search_entry.get().strip()
+        if q:
+            self.sio.emit('search_messages', {'query': q, 'group_id': self.active_group_id})
+
+    def do_search_users(self):
+        q = self.search_entry.get().strip()
+        if q:
+            self.sio.emit('search_users', {'query': q})
+
+    def display_search_results(self, data, rtype):
+        for w in self.search_results_frame.winfo_children():
+            w.destroy()
+        results = data.get("results", [])
+        if not results:
+            ctk.CTkLabel(self.search_results_frame, text="No results found.").pack(pady=10)
+            return
+
+        for r in results:
+            if rtype == 'messages':
+                text = f"{r['username']}: {r['text'][:30]}..."
+            else:
+                text = r['username']
+                
+            frame = ctk.CTkFrame(self.search_results_frame, fg_color=("gray85", "#333333"))
+            frame.pack(fill="x", pady=2)
+            ctk.CTkLabel(frame, text=text, anchor="w", wraplength=200, justify="left").pack(fill="x", padx=5, pady=5)
+
+    def do_upload_avatar(self):
+        filepath = filedialog.askopenfilename(title="Select Avatar", filetypes=(("Image files", "*.png *.jpg *.jpeg"),))
+        if filepath:
+            try:
+                img = Image.open(filepath)
+                img = img.convert("RGB")
+                img.thumbnail((200, 200))
+                buffered = BytesIO()
+                img.save(buffered, format="JPEG")
+                encoded = base64.b64encode(buffered.getvalue()).decode('utf-8')
+                self.sio.emit('update_avatar', {'file_data': encoded})
+            except Exception as e:
+                self.show_toast(f"Failed to load avatar: {e}")
+
+    def update_profile_ui(self):
+        if self.my_avatar_data:
+            try:
+                img_bytes = base64.b64decode(self.my_avatar_data)
+                img = Image.open(BytesIO(img_bytes))
+                img.thumbnail((100, 100))
+                ctk_img = ctk.CTkImage(light_image=img, dark_image=img, size=(100, 100))
+                self.profile_avatar_label.configure(image=ctk_img, text="")
+            except Exception as e:
+                print(f"Error drawing avatar: {e}")
 
     def stop(self):
         self.running = False

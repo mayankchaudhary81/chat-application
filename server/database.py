@@ -59,6 +59,11 @@ def initialize_db():
         cursor.execute("ALTER TABLE messages ADD COLUMN group_id TEXT DEFAULT 'global'")
     except sqlite3.OperationalError:
         pass
+
+    try:
+        cursor.execute("ALTER TABLE users ADD COLUMN avatar TEXT")
+    except sqlite3.OperationalError:
+        pass
         
     cursor.execute("INSERT OR IGNORE INTO groups (id, name, created_by) VALUES ('global', 'Global', 'system')")
     
@@ -241,6 +246,78 @@ def get_all_groups():
         return [{"id": r[0], "name": r[1]} for r in rows]
     except Exception as e:
         print(f"DB Error fetching all groups: {e}")
+        return []
+
+def update_avatar(username, file_data):
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute('UPDATE users SET avatar = ? WHERE username = ?', (file_data, username))
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        print(f"DB Error updating avatar: {e}")
+        return False
+
+def get_user_profile(username):
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute('SELECT username, avatar FROM users WHERE username = ?', (username,))
+        row = cursor.fetchone()
+        conn.close()
+        if row:
+            return {"username": row[0], "avatar": row[1]}
+        return None
+    except Exception as e:
+        print(f"DB Error fetching profile: {e}")
+        return None
+
+def search_messages_db(group_id, query, limit=50):
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        search_pattern = f"%{query}%"
+        cursor.execute('''
+            SELECT id, username, text, msg_type, file_data, timestamp, is_edited, deleted, read_by 
+            FROM messages 
+            WHERE (group_id = ? OR group_id IS NULL)
+            AND text LIKE ?
+            AND deleted = 0
+            ORDER BY timestamp DESC LIMIT ?
+        ''', (group_id, search_pattern, limit))
+        rows = cursor.fetchall()
+        conn.close()
+        messages = []
+        for row in rows:
+            messages.append({
+                "id": row[0],
+                "username": row[1],
+                "text": row[2],
+                "msg_type": row[3],
+                "file_data": row[4],
+                "timestamp": row[5],
+                "is_edited": bool(row[6]),
+                "deleted": bool(row[7]),
+                "read_by": json.loads(row[8]) if row[8] else []
+            })
+        return messages
+    except Exception as e:
+        print(f"DB Error searching messages: {e}")
+        return []
+
+def search_users_db(query, limit=50):
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        search_pattern = f"%{query}%"
+        cursor.execute('SELECT username, avatar FROM users WHERE username LIKE ? LIMIT ?', (search_pattern, limit))
+        rows = cursor.fetchall()
+        conn.close()
+        return [{"username": row[0], "avatar": row[1]} for row in rows]
+    except Exception as e:
+        print(f"DB Error searching users: {e}")
         return []
 
 initialize_db()
