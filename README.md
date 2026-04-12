@@ -36,6 +36,11 @@ The application is strictly separated into a headless backend `server/` node and
 
 ## ⚙️ Installation & Usage
 
+**0. Navigate to the project root:**
+```bash
+cd chat-application
+```
+
 **1. Install dependencies:**
 ```bash
 pip install -r requirements.txt
