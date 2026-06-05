@@ -258,7 +258,10 @@ class ChatClientGUI:
             
         try:
             if not self.sio.connected:
-                self.sio.connect(f"http://{self.host}:{self.port}")
+                if "://" in str(self.host):
+                    self.sio.connect(self.host)
+                else:
+                    self.sio.connect(f"http://{self.host}:{self.port}")
             self.running = True
             
             self.sio.emit(action, {"username": username, "password": password})
