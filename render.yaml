@@ -4,10 +4,10 @@ services:
     env: docker
     dockerfilePath: ./server/Dockerfile
     region: oregon
-    plan: free
+    plan: starter
     disk:
       name: sqlite-data
-      mountPath: /app/server
+      mountPath: /app/data
       sizeGB: 1
     envVars:
       - key: PORT
@@ -16,3 +16,5 @@ services:
         value: 0.0.0.0
       - key: JWT_SECRET
         generateValue: true
+      - key: DATABASE_PATH
+        value: /app/data/users.db

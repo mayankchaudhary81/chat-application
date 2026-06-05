@@ -3,7 +3,7 @@ import hashlib
 import os
 import json
 
-DB_PATH = 'users.db'
+DB_PATH = os.getenv('DATABASE_PATH', 'users.db')
 
 def hash_password(password: str) -> str:
     # Use PBKDF2 for password hashing
