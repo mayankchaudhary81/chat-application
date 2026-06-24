@@ -22,7 +22,6 @@ class ChatClientGUI:
         self.win = app
         self.host = host
         self.port = port
-        
         self.sio = socketio.Client()
         self.running = False
         self.gui_done = False
@@ -164,13 +163,17 @@ class ChatClientGUI:
             group_id = data.get("group_id", "global")
             if group_id != self.active_group_id:
                 if data.get('username') != self.username:
-                    try: winsound.MessageBeep(winsound.MB_ICONASTERISK)
-                    except: pass
+                    try:
+                        winsound.MessageBeep(winsound.MB_ICONASTERISK)
+                    except Exception:
+                        pass
                 return
                 
             if data.get('username') != self.username:
-                try: winsound.MessageBeep(winsound.MB_ICONASTERISK)
-                except: pass
+                try:
+                    winsound.MessageBeep(winsound.MB_ICONASTERISK)
+                except Exception:
+                    pass
             self.win.after(0, lambda m=data: self.render_message(m))
 
     def on_message_edited(self, data):
@@ -200,9 +203,9 @@ class ChatClientGUI:
             if 'image_label' in ui:
                 ui['image_label'].destroy()
             if 'edit_btn' in ui:
-                 ui['edit_btn'].destroy()
+                ui['edit_btn'].destroy()
             if 'del_btn' in ui:
-                 ui['del_btn'].destroy()
+                ui['del_btn'].destroy()
 
     def _update_msg_read(self, msg_id):
         if msg_id in self.messages_ui:
@@ -279,7 +282,7 @@ class ChatClientGUI:
             if self.sio.connected:
                 self.sio.disconnect()
             self.running = False
-        except:
+        except Exception:
             pass
 
     def build_chat_interface(self):
@@ -682,7 +685,7 @@ class ChatClientGUI:
         try:
             if self.sio.connected:
                 self.sio.disconnect()
-        except:
+        except Exception:
             pass
         self.win.destroy()
         sys.exit(0)
